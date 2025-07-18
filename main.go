@@ -166,19 +166,13 @@ func main() {
 		}
 
 		marshalValues := UserValues{Id: user.ID, CreatedAt: user.CreatedAt, UpdatedAt: user.UpdatedAt, Email: user.Email}
-		fmt.Println(json.Marshal(marshalValues))
-		fmt.Printf("%T\n", marshalValues)
-		jsonData, err := json.Marshal(marshalValues)
-		fmt.Println(string(jsonData), err)
-
 		returnData, marshalErr := json.Marshal(marshalValues)
-		fmt.Printf("%T\n", marshalValues)
 		if marshalErr != nil {
 			w.WriteHeader(500)
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Debug", "students-custom-handler")
 		w.WriteHeader(201)
 		w.Write(returnData)
 
