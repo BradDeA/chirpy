@@ -24,7 +24,8 @@ type apiConfig struct {
 }
 
 type RequestParams struct {
-	Body string `json:"body"`
+	Body    string    `json:"body"`
+	User_id uuid.UUID `json:"user_id"`
 }
 
 type UserValues struct {
@@ -32,6 +33,14 @@ type UserValues struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+}
+
+type ChirpRes struct {
+	Id         uuid.UUID `json:"id"`
+	Created_at time.Time `json:"created_at"`
+	Updated_at time.Time `json:"updated_at"`
+	Body       string    `json:"body"`
+	User_id    uuid.UUID `json:"user_id"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -95,14 +104,9 @@ func main() {
 
 	})
 
-	ServMux.HandleFunc("POST /api/validate_chirp", func(w http.ResponseWriter, r *http.Request) {
+	ServMux.HandleFunc("POST /api/chirps", func(w http.ResponseWriter, r *http.Request) {
+
 		profane := []string{"kerfuffle", "sharbert", "fornax"}
-
-		type ReturnValues struct {
-			Error        string `json:"error"`
-			Cleaned_body string `json:"cleaned_body"`
-		}
-
 		decoder := json.NewDecoder(r.Body)
 		jsonParams := RequestParams{}
 		err := decoder.Decode(&jsonParams)
@@ -112,7 +116,7 @@ func main() {
 		}
 
 		if len(jsonParams.Body) > 140 {
-			values := ReturnValues{Error: "Chirp is too long"}
+			values := ChirpRes{Body: "Chirp is too long"}
 			data, err := json.Marshal(values)
 			if err != nil {
 				w.WriteHeader(500)
@@ -135,15 +139,29 @@ func main() {
 			}
 		}
 		joined := strings.Join(words, " ")
-		successValue := ReturnValues{Error: "", Cleaned_body: joined}
-		successData, err := json.Marshal(successValue)
+
+		chirp, createErr := apiCfg.Db.CreateChirp(context.Background(), database.CreateChirpParams{Body: joined, UserID: jsonParams.User_id})
+		if createErr != nil {
+			w.WriteHeader(500)
+			w.Write([]byte(createErr.Error()))
+			return
+		}
+		res := ChirpRes{
+			Id:         chirp.ID,
+			Created_at: chirp.CreatedAt,
+			Updated_at: chirp.UpdatedAt,
+			Body:       chirp.Body,
+			User_id:    chirp.UserID,
+		}
+		marshal, err := json.Marshal(res)
 		if err != nil {
 			w.WriteHeader(500)
 			return
 		}
+
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(200)
-		w.Write(successData)
+		w.WriteHeader(201)
+		w.Write(marshal)
 	})
 
 	ServMux.HandleFunc("POST /api/users", func(w http.ResponseWriter, r *http.Request) {
@@ -172,10 +190,61 @@ func main() {
 			return
 		}
 
-		w.Header().Set("X-Debug", "students-custom-handler")
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(201)
 		w.Write(returnData)
 
+	})
+
+	ServMux.HandleFunc("GET /api/chirps", func(w http.ResponseWriter, r *http.Request) {
+		allChirps, err := apiCfg.Db.GetChirps(context.Background())
+		if err != nil {
+			w.WriteHeader(500)
+			return
+		}
+		chirpStructs := []ChirpRes{}
+
+		for _, chirp := range allChirps {
+			chirpStructs = append(chirpStructs, ChirpRes{Id: chirp.ID, Created_at: chirp.CreatedAt, Updated_at: chirp.UpdatedAt, Body: chirp.Body, User_id: chirp.UserID})
+		}
+
+		chirps, chirpErr := json.Marshal(chirpStructs)
+		if chirpErr != nil {
+			w.WriteHeader(500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write(chirps)
+	})
+
+	ServMux.HandleFunc("GET /api/chirps/{chripID}", func(w http.ResponseWriter, r *http.Request) {
+		allChirps, err := apiCfg.Db.GetChirps(context.Background())
+		if err != nil {
+			w.WriteHeader(500)
+			return
+		}
+		chirpStructs := ChirpRes{}
+
+		for _, chirp := range allChirps {
+			if r.PathValue("chripID") == chirp.ID.String() {
+				chirpStructs = ChirpRes{Id: chirp.ID, Created_at: chirp.CreatedAt, Updated_at: chirp.UpdatedAt, Body: chirp.Body, User_id: chirp.UserID}
+			} else {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(404)
+			}
+		}
+
+		chirps, chirpErr := json.Marshal(chirpStructs)
+		if chirpErr != nil {
+			w.WriteHeader(500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write(chirps)
 	})
 
 	err := server.ListenAndServe()
