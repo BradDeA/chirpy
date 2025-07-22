@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/BradDeA/chirpy.git/internal/auth"
 	"github.com/BradDeA/chirpy.git/internal/database"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
@@ -33,6 +34,7 @@ type UserValues struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+	Password  string    `json:"-"`
 }
 
 type ChirpRes struct {
@@ -166,18 +168,25 @@ func main() {
 
 	ServMux.HandleFunc("POST /api/users", func(w http.ResponseWriter, r *http.Request) {
 
-		type EmailStruct struct {
-			Email string `json:"email"`
+		type JsonBody struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
 		}
 
 		decoder := json.NewDecoder(r.Body)
-		params := EmailStruct{}
+		params := JsonBody{}
 		err := decoder.Decode(&params)
 		if err != nil {
 			w.WriteHeader(500)
+			fmt.Print(err)
 			return
 		}
-		user, userErr := apiCfg.Db.CreateUser(context.Background(), params.Email)
+		hash, hashErr := auth.HashPassword(params.Password)
+		if hashErr != nil {
+			w.WriteHeader(500)
+			return
+		}
+		user, userErr := apiCfg.Db.CreateUser(context.Background(), database.CreateUserParams{Email: params.Email, HashedPassword: hash})
 		if userErr != nil {
 			w.WriteHeader(500)
 			return
@@ -245,6 +254,42 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		w.Write(chirps)
+	})
+
+	ServMux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
+		type ValidReq struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		params := ValidReq{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			w.WriteHeader(500)
+			return
+		}
+		found, err := apiCfg.Db.EmailLookup(context.Background(), params.Email)
+		if err != nil {
+			w.WriteHeader(401)
+			fmt.Println("Invalid username or password")
+			return
+		}
+		check := auth.CheckPasswordHash(params.Password, found.HashedPassword)
+		if check != nil {
+			w.WriteHeader(401)
+			fmt.Println("Invalid username or password")
+			return
+		}
+		marshalValues := UserValues{Id: found.ID, CreatedAt: found.CreatedAt, UpdatedAt: found.UpdatedAt, Email: found.Email}
+		returnData, marshalErr := json.Marshal(marshalValues)
+		if marshalErr != nil {
+			w.WriteHeader(500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write(returnData)
 	})
 
 	err := server.ListenAndServe()
