@@ -22,6 +22,7 @@ import (
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	Db             *database.Queries
+	SecretKey      string
 }
 
 type RequestParams struct {
@@ -35,6 +36,7 @@ type UserValues struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
 	Password  string    `json:"-"`
+	Token     string    `json:"token"`
 }
 
 type ChirpRes struct {
@@ -85,6 +87,7 @@ func main() {
 	dbURL := os.Getenv("DB_URL")
 	ServMux := http.NewServeMux()
 	server := http.Server{Addr: ":8080", Handler: ServMux}
+	secretString := os.Getenv("SECRET")
 
 	db, dberr := sql.Open("postgres", dbURL)
 	if dberr != nil {
@@ -92,7 +95,7 @@ func main() {
 	}
 
 	dbQueries := database.New(db)
-	apiCfg := apiConfig{Db: dbQueries}
+	apiCfg := apiConfig{Db: dbQueries, SecretKey: secretString}
 
 	ServMux.Handle("GET /app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))))
 	ServMux.Handle("GET /assets", apiCfg.middlewareMetricsInc(http.FileServer(http.Dir("."))))
@@ -114,6 +117,18 @@ func main() {
 		err := decoder.Decode(&jsonParams)
 		if err != nil {
 			w.WriteHeader(500)
+			return
+		}
+
+		token, tokenErr := auth.GetBearerToken(r.Header)
+		if tokenErr != nil {
+			w.WriteHeader(401)
+			return
+		}
+
+		tokenValid, tokenErr := auth.ValidateJWT(token, secretString)
+		if tokenErr != nil {
+			w.WriteHeader(401)
 			return
 		}
 
@@ -142,7 +157,7 @@ func main() {
 		}
 		joined := strings.Join(words, " ")
 
-		chirp, createErr := apiCfg.Db.CreateChirp(context.Background(), database.CreateChirpParams{Body: joined, UserID: jsonParams.User_id})
+		chirp, createErr := apiCfg.Db.CreateChirp(context.Background(), database.CreateChirpParams{Body: joined, UserID: tokenValid})
 		if createErr != nil {
 			w.WriteHeader(500)
 			w.Write([]byte(createErr.Error()))
@@ -153,7 +168,7 @@ func main() {
 			Created_at: chirp.CreatedAt,
 			Updated_at: chirp.UpdatedAt,
 			Body:       chirp.Body,
-			User_id:    chirp.UserID,
+			User_id:    tokenValid,
 		}
 		marshal, err := json.Marshal(res)
 		if err != nil {
@@ -258,9 +273,11 @@ func main() {
 
 	ServMux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
 		type ValidReq struct {
-			Email    string `json:"email"`
-			Password string `json:"password"`
+			Email     string `json:"email"`
+			Password  string `json:"password"`
+			ExpiresIn int    `json:"expires_in_seconds,omitempty"`
 		}
+
 		decoder := json.NewDecoder(r.Body)
 		params := ValidReq{}
 		err := decoder.Decode(&params)
@@ -268,22 +285,37 @@ func main() {
 			w.WriteHeader(500)
 			return
 		}
+
 		found, err := apiCfg.Db.EmailLookup(context.Background(), params.Email)
 		if err != nil {
 			w.WriteHeader(401)
 			fmt.Println("Invalid username or password")
 			return
 		}
+
 		check := auth.CheckPasswordHash(params.Password, found.HashedPassword)
 		if check != nil {
 			w.WriteHeader(401)
 			fmt.Println("Invalid username or password")
 			return
 		}
-		marshalValues := UserValues{Id: found.ID, CreatedAt: found.CreatedAt, UpdatedAt: found.UpdatedAt, Email: found.Email}
+
+		if params.ExpiresIn == 0 || params.ExpiresIn > 3600 {
+			params.ExpiresIn = 3600
+		}
+
+		token, tokenErr := auth.MakeJWT(found.ID, secretString, time.Duration(params.ExpiresIn)*time.Second)
+		if tokenErr != nil {
+			w.WriteHeader(500)
+			fmt.Println("makejwt error")
+			return
+		}
+
+		marshalValues := UserValues{Id: found.ID, CreatedAt: found.CreatedAt, UpdatedAt: found.UpdatedAt, Email: found.Email, Token: token}
 		returnData, marshalErr := json.Marshal(marshalValues)
 		if marshalErr != nil {
 			w.WriteHeader(500)
+			fmt.Println("marshal error")
 			return
 		}
 

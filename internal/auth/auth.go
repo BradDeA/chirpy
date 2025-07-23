@@ -1,6 +1,9 @@
 package auth
 
 import (
+	"errors"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -35,17 +38,40 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 		return []byte(tokenSecret), nil
 	}
 
-	token, err := jwt.ParseWithClaims(tokenString, jwt.RegisteredClaims{}, keyFunc)
+	token, err := jwt.ParseWithClaims(tokenString, &jwt.RegisteredClaims{}, keyFunc)
 	if err != nil {
 		return uuid.Nil, err
 	}
+
 	userId, claimErr := token.Claims.GetSubject()
 	if claimErr != nil {
 		return uuid.Nil, claimErr
 	}
+
 	uuidParse, uuidErr := uuid.Parse(userId)
 	if uuidErr != nil {
 		return uuid.Nil, uuidErr
 	}
+
 	return uuidParse, nil
+}
+
+func GetBearerToken(headers http.Header) (string, error) {
+	authToken := headers.Get("Authorization")
+	if authToken == "" {
+		return "", errors.New("bad token")
+	}
+
+	var stripPrefix string
+	if strings.HasPrefix(authToken, "Bearer ") {
+		stripPrefix = strings.TrimPrefix(authToken, "Bearer ")
+	} else {
+		return "", errors.New("bad token")
+	}
+
+	stripSpace := strings.TrimSpace(stripPrefix)
+	if stripSpace == "" {
+		return "", errors.New("bad token")
+	}
+	return stripSpace, nil
 }
