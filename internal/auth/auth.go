@@ -1,8 +1,11 @@
 package auth
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,8 +27,9 @@ func CheckPasswordHash(password, hash string) error {
 	return result
 }
 
-func MakeJWT(userID uuid.UUID, tokenSecret string, expiresIn time.Duration) (string, error) {
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{Issuer: "chirpy", IssuedAt: jwt.NewNumericDate(time.Now()), ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiresIn)), Subject: userID.String()})
+func MakeJWT(userID uuid.UUID, tokenSecret string) (string, error) {
+	expirationTime := time.Now().Add(time.Hour)
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{Issuer: "chirpy", IssuedAt: jwt.NewNumericDate(time.Now()), ExpiresAt: jwt.NewNumericDate(expirationTime), Subject: userID.String()})
 	tokenString, err := token.SignedString([]byte(tokenSecret))
 	if err != nil {
 		return "", err
@@ -74,4 +78,15 @@ func GetBearerToken(headers http.Header) (string, error) {
 		return "", errors.New("bad token")
 	}
 	return stripSpace, nil
+}
+
+func MakeRefreshToken() (string, error) {
+	key := make([]byte, 32)
+	code, err := rand.Read(key)
+	if err != nil {
+		return "", err
+	}
+	hexEncode := strconv.Itoa(code)
+	hexString := hex.EncodeToString([]byte(hexEncode))
+	return hexString, nil
 }

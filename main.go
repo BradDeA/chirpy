@@ -31,12 +31,13 @@ type RequestParams struct {
 }
 
 type UserValues struct {
-	Id        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
-	Password  string    `json:"-"`
-	Token     string    `json:"token"`
+	Id           uuid.UUID `json:"id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	Email        string    `json:"email"`
+	Password     string    `json:"-"`
+	Token        string    `json:"token"`
+	RefreshToken string    `json:"refresh_token"`
 }
 
 type ChirpRes struct {
@@ -273,9 +274,8 @@ func main() {
 
 	ServMux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
 		type ValidReq struct {
-			Email     string `json:"email"`
-			Password  string `json:"password"`
-			ExpiresIn int    `json:"expires_in_seconds,omitempty"`
+			Email    string `json:"email"`
+			Password string `json:"password"`
 		}
 
 		decoder := json.NewDecoder(r.Body)
@@ -300,18 +300,35 @@ func main() {
 			return
 		}
 
-		if params.ExpiresIn == 0 || params.ExpiresIn > 3600 {
-			params.ExpiresIn = 3600
-		}
-
-		token, tokenErr := auth.MakeJWT(found.ID, secretString, time.Duration(params.ExpiresIn)*time.Second)
+		token, tokenErr := auth.MakeJWT(found.ID, secretString)
 		if tokenErr != nil {
 			w.WriteHeader(500)
 			fmt.Println("makejwt error")
 			return
 		}
 
-		marshalValues := UserValues{Id: found.ID, CreatedAt: found.CreatedAt, UpdatedAt: found.UpdatedAt, Email: found.Email, Token: token}
+		refresh_token, tokenErr := auth.MakeRefreshToken()
+		if tokenErr != nil {
+			w.WriteHeader(500)
+			fmt.Println("refresh token error")
+			return
+		}
+
+		_, createErr := apiCfg.Db.CreateRefreshToken(context.Background(), database.CreateRefreshTokenParams{
+			Token:     refresh_token,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+			UserID:    found.ID,
+			ExpiresAt: time.Now().Add(60 * 24 * time.Hour),
+			RevokedAt: sql.NullTime{Valid: false},
+		})
+		if createErr != nil {
+			w.WriteHeader(500)
+			fmt.Println("create refesh token error")
+			return
+		}
+
+		marshalValues := UserValues{Id: found.ID, CreatedAt: found.CreatedAt, UpdatedAt: found.UpdatedAt, Email: found.Email, Token: token, RefreshToken: refresh_token}
 		returnData, marshalErr := json.Marshal(marshalValues)
 		if marshalErr != nil {
 			w.WriteHeader(500)
@@ -322,6 +339,53 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		w.Write(returnData)
+	})
+
+	ServMux.HandleFunc("POST /api/refresh", func(w http.ResponseWriter, r *http.Request) {
+		token, getErr := auth.GetBearerToken(r.Header)
+		if getErr != nil {
+			w.WriteHeader(500)
+			return
+		}
+		user, err := apiCfg.Db.GetUserFromRefreshToken(context.Background(), token)
+		if err != nil {
+			w.WriteHeader(401)
+			return
+		}
+
+		accessToken, err := auth.MakeJWT(user.ID, secretString)
+		if err != nil {
+			w.WriteHeader(500)
+			return
+		}
+		response := struct {
+			Token string `json:"token"`
+		}{
+			Token: accessToken,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+
+		json.NewEncoder(w).Encode(response)
+	})
+
+	ServMux.HandleFunc("POST /api/revoke", func(w http.ResponseWriter, r *http.Request) {
+		token, gettokenErr := auth.GetBearerToken(r.Header)
+		if gettokenErr != nil {
+			w.WriteHeader(500)
+			return
+		}
+
+		err := apiCfg.Db.RevokeRefreshToken(context.Background(), database.RevokeRefreshTokenParams{
+			Token:     token,
+			RevokedAt: sql.NullTime{Time: time.Now(), Valid: true},
+		})
+		if err != nil {
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(204)
 	})
 
 	err := server.ListenAndServe()
