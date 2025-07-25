@@ -244,21 +244,33 @@ func main() {
 		w.Write(chirps)
 	})
 
-	ServMux.HandleFunc("GET /api/chirps/{chripID}", func(w http.ResponseWriter, r *http.Request) {
+	ServMux.HandleFunc("GET /api/chirps/{chirpID}", func(w http.ResponseWriter, r *http.Request) {
 		allChirps, err := apiCfg.Db.GetChirps(context.Background())
 		if err != nil {
 			w.WriteHeader(500)
 			return
 		}
-		chirpStructs := ChirpRes{}
+
+		var chirpStructs ChirpRes
+		found := false
 
 		for _, chirp := range allChirps {
-			if r.PathValue("chripID") == chirp.ID.String() {
-				chirpStructs = ChirpRes{Id: chirp.ID, Created_at: chirp.CreatedAt, Updated_at: chirp.UpdatedAt, Body: chirp.Body, User_id: chirp.UserID}
-			} else {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(404)
+			if r.PathValue("chirpID") == chirp.ID.String() {
+				found = true
+				chirpStructs = ChirpRes{
+					Id:         chirp.ID,
+					Created_at: chirp.CreatedAt,
+					Updated_at: chirp.UpdatedAt,
+					Body:       chirp.Body,
+					User_id:    chirp.UserID,
+				}
+				break
 			}
+		}
+
+		if !found {
+			w.WriteHeader(404)
+			return
 		}
 
 		chirps, chirpErr := json.Marshal(chirpStructs)
@@ -324,7 +336,7 @@ func main() {
 		})
 		if createErr != nil {
 			w.WriteHeader(500)
-			fmt.Println("create refesh token error")
+			fmt.Println("create refesh token error", createErr)
 			return
 		}
 
@@ -385,6 +397,96 @@ func main() {
 			w.WriteHeader(500)
 			return
 		}
+		w.WriteHeader(204)
+	})
+
+	ServMux.HandleFunc("PUT /api/users", func(w http.ResponseWriter, r *http.Request) {
+		token, gettokenErr := auth.GetBearerToken(r.Header)
+		if gettokenErr != nil {
+			w.WriteHeader(401)
+			return
+		}
+
+		user, getuserErr := auth.ValidateJWT(token, secretString)
+		if getuserErr != nil {
+			w.WriteHeader(401)
+			return
+		}
+
+		type ValidReq struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+
+		decoder := json.NewDecoder(r.Body)
+		params := ValidReq{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			w.WriteHeader(400)
+			return
+		}
+		pword, hashErr := auth.HashPassword(params.Password)
+		if hashErr != nil {
+			w.WriteHeader(500)
+			return
+		}
+		updateErr := apiCfg.Db.UpdateUser(context.Background(), database.UpdateUserParams{Email: params.Email, HashedPassword: pword, ID: user})
+		if updateErr != nil {
+			w.WriteHeader(500)
+			return
+		}
+		record, lookupErr := apiCfg.Db.EmailLookup(context.Background(), params.Email)
+		if lookupErr != nil {
+			w.WriteHeader(500)
+			return
+		}
+		marshalValues := UserValues{Id: record.ID, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, Email: record.Email}
+		returnData, marshalErr := json.Marshal(marshalValues)
+		if marshalErr != nil {
+			w.WriteHeader(500)
+			fmt.Println("marshal error")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write(returnData)
+
+	})
+
+	ServMux.HandleFunc("DELETE /api/chirps/{chirpID}", func(w http.ResponseWriter, r *http.Request) {
+		token, gettokenErr := auth.GetBearerToken(r.Header)
+		if gettokenErr != nil {
+			w.WriteHeader(401)
+			return
+		}
+		userID, getuserErr := auth.ValidateJWT(token, secretString)
+		if getuserErr != nil {
+			w.WriteHeader(401)
+			return
+		}
+
+		allChirps, err := apiCfg.Db.GetChirps(context.Background())
+		if err != nil {
+			w.WriteHeader(500)
+			return
+		}
+
+		for _, chirp := range allChirps {
+			if r.PathValue("chirpID") == chirp.ID.String() {
+				if chirp.UserID != userID {
+					w.WriteHeader(403)
+					return
+				}
+				deleteErr := apiCfg.Db.DeleteChirp(context.Background(), chirp.ID)
+				if deleteErr != nil {
+					w.WriteHeader(401)
+					return
+				}
+
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(204)
 	})
 
