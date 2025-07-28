@@ -31,13 +31,14 @@ type RequestParams struct {
 }
 
 type UserValues struct {
-	Id           uuid.UUID `json:"id"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	Email        string    `json:"email"`
-	Password     string    `json:"-"`
-	Token        string    `json:"token"`
-	RefreshToken string    `json:"refresh_token"`
+	Id            uuid.UUID `json:"id"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	Email         string    `json:"email"`
+	Password      string    `json:"-"`
+	Token         string    `json:"token"`
+	RefreshToken  string    `json:"refresh_token"`
+	Is_chirpy_red bool      `json:"is_chirpy_red"`
 }
 
 type ChirpRes struct {
@@ -340,7 +341,7 @@ func main() {
 			return
 		}
 
-		marshalValues := UserValues{Id: found.ID, CreatedAt: found.CreatedAt, UpdatedAt: found.UpdatedAt, Email: found.Email, Token: token, RefreshToken: refresh_token}
+		marshalValues := UserValues{Id: found.ID, CreatedAt: found.CreatedAt, UpdatedAt: found.UpdatedAt, Email: found.Email, Token: token, RefreshToken: refresh_token, Is_chirpy_red: found.IsChirpyRed.Bool}
 		returnData, marshalErr := json.Marshal(marshalValues)
 		if marshalErr != nil {
 			w.WriteHeader(500)
@@ -486,6 +487,43 @@ func main() {
 
 			}
 		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(204)
+	})
+
+	ServMux.HandleFunc("POST /api/polka/webhooks", func(w http.ResponseWriter, r *http.Request) {
+		type UpdateData struct {
+			User_id uuid.UUID `json:"user_id"`
+		}
+
+		type UpgradeReq struct {
+			Event string     `json:"event"`
+			Data  UpdateData `json:"data"`
+		}
+
+		decoder := json.NewDecoder(r.Body)
+		params := UpgradeReq{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			w.WriteHeader(400)
+			return
+		}
+
+		if params.Event != "user.upgraded" {
+			w.WriteHeader(204)
+			return
+		}
+
+		rows, upgradeErr := apiCfg.Db.UpgradeToRed(context.Background(), params.Data.User_id)
+		if upgradeErr != nil {
+			w.WriteHeader(500)
+			return
+		}
+		if rows == 0 {
+			w.WriteHeader(404)
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(204)
 	})
