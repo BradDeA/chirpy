@@ -23,6 +23,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	Db             *database.Queries
 	SecretKey      string
+	ApiKey         string
 }
 
 type RequestParams struct {
@@ -90,6 +91,7 @@ func main() {
 	ServMux := http.NewServeMux()
 	server := http.Server{Addr: ":8080", Handler: ServMux}
 	secretString := os.Getenv("SECRET")
+	apiKey := os.Getenv("API_KEY")
 
 	db, dberr := sql.Open("postgres", dbURL)
 	if dberr != nil {
@@ -223,6 +225,8 @@ func main() {
 	})
 
 	ServMux.HandleFunc("GET /api/chirps", func(w http.ResponseWriter, r *http.Request) {
+		authorId := r.URL.Query().Get("author_id")
+
 		allChirps, err := apiCfg.Db.GetChirps(context.Background())
 		if err != nil {
 			w.WriteHeader(500)
@@ -231,7 +235,13 @@ func main() {
 		chirpStructs := []ChirpRes{}
 
 		for _, chirp := range allChirps {
-			chirpStructs = append(chirpStructs, ChirpRes{Id: chirp.ID, Created_at: chirp.CreatedAt, Updated_at: chirp.UpdatedAt, Body: chirp.Body, User_id: chirp.UserID})
+			if authorId == "" {
+				chirpStructs = append(chirpStructs, ChirpRes{Id: chirp.ID, Created_at: chirp.CreatedAt, Updated_at: chirp.UpdatedAt, Body: chirp.Body, User_id: chirp.UserID})
+			}
+			if authorId == chirp.UserID.String() {
+				chirpStructs = append(chirpStructs, ChirpRes{Id: chirp.ID, Created_at: chirp.CreatedAt, Updated_at: chirp.UpdatedAt, Body: chirp.Body, User_id: chirp.UserID})
+			}
+
 		}
 
 		chirps, chirpErr := json.Marshal(chirpStructs)
@@ -506,6 +516,17 @@ func main() {
 		err := decoder.Decode(&params)
 		if err != nil {
 			w.WriteHeader(400)
+			return
+		}
+
+		key, keyErr := auth.GetAPIKey(r.Header)
+		if keyErr != nil {
+			w.WriteHeader(401)
+			return
+		}
+
+		if key != apiKey {
+			w.WriteHeader(401)
 			return
 		}
 

@@ -88,3 +88,23 @@ func MakeRefreshToken() (string, error) {
 	hexString := hex.EncodeToString(key)
 	return hexString, nil
 }
+
+func GetAPIKey(headers http.Header) (string, error) {
+	authToken := headers.Get("Authorization")
+	if authToken == "" {
+		return "", errors.New("bad api key")
+	}
+
+	var stripPrefix string
+	if strings.HasPrefix(authToken, "ApiKey ") {
+		stripPrefix = strings.TrimPrefix(authToken, "ApiKey ")
+	} else {
+		return "", errors.New("bad api key")
+	}
+
+	stripSpace := strings.TrimSpace(stripPrefix)
+	if stripSpace == "" {
+		return "", errors.New("bad token")
+	}
+	return stripSpace, nil
+}
