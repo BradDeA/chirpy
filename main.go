@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -226,6 +227,7 @@ func main() {
 
 	ServMux.HandleFunc("GET /api/chirps", func(w http.ResponseWriter, r *http.Request) {
 		authorId := r.URL.Query().Get("author_id")
+		sortOrder := r.URL.Query().Get("sort")
 
 		allChirps, err := apiCfg.Db.GetChirps(context.Background())
 		if err != nil {
@@ -241,7 +243,10 @@ func main() {
 			if authorId == chirp.UserID.String() {
 				chirpStructs = append(chirpStructs, ChirpRes{Id: chirp.ID, Created_at: chirp.CreatedAt, Updated_at: chirp.UpdatedAt, Body: chirp.Body, User_id: chirp.UserID})
 			}
+		}
 
+		if sortOrder == "desc" {
+			sort.Slice(chirpStructs, func(i, j int) bool { return chirpStructs[i].Created_at.After(chirpStructs[j].Created_at) })
 		}
 
 		chirps, chirpErr := json.Marshal(chirpStructs)
